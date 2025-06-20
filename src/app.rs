@@ -20,6 +20,8 @@ use circular_buffer::CircularBuffer;
 use libbpf_rs::{query::ProgInfoIter, Iter, Link};
 use ratatui::widgets::ScrollbarState;
 use ratatui::widgets::TableState;
+use std::fs::OpenOptions;
+use std::io::{self, Write};
 use std::{
     collections::HashMap,
     io::Read,
@@ -74,6 +76,49 @@ pub struct PidIterEntry {
     id: u32,
     pid: i32,
     comm: [u8; 16],
+}
+
+// Add this function to your app.rs file
+fn write_bpf_program_to_file(bpf_program: &BpfProgram) -> io::Result<()> {
+    // Create CSV line with program data (no timestamp needed)
+    let data_line = format!(
+        "{},{},{},{:.2},{},{}\n",
+        bpf_program.id,                   // Program ID
+        bpf_program.name,                 // Program name
+        bpf_program.bpf_type,            // Program type
+        bpf_program.cpu_time_percent(),   // CPU percentage
+        bpf_program.events_per_second(),  // Events per second
+        bpf_program.period_average_runtime_ns()  // Average runtime
+    );
+
+    // Open file in append mode (creates if doesn't exist)
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("bpf_stats.csv")?;
+
+    file.write_all(data_line.as_bytes())?;
+    file.flush()?; // Ensure data is written immediately
+
+    Ok(())
+}
+
+// Write CSV header once at startup
+fn write_csv_header() -> io::Result<()> {
+    use std::path::Path;
+
+    // Only write header if file doesn't exist
+    if !Path::new("bpf_stats.csv").exists() {
+        let mut file = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .open("bpf_stats.csv")?;
+
+        file.write_all(b"program_id,program_name,program_type,cpu_percent,events_per_sec,avg_runtime_ns\n")?;
+        file.flush()?;
+    }
+
+    Ok(())
 }
 
 fn get_pid_map(link: &Option<Link>) -> HashMap<u32, Vec<Process>> {
@@ -156,6 +201,11 @@ impl App {
         let sort_col = Arc::clone(&self.sorted_column);
         let graphs_bpf_program = Arc::clone(&self.graphs_bpf_program);
 
+        // Add this here - write CSV header once at startup
+        if let Err(e) = write_csv_header() {
+            eprintln!("Failed to write CSV header: {}", e);
+        }
+
         thread::spawn(move || loop {
             let loop_start = Instant::now();
 
@@ -222,6 +272,7 @@ impl App {
                     }
                 }
 
+                write_bpf_program_to_file(&bpf_program);
                 items.push(bpf_program);
             }
 
